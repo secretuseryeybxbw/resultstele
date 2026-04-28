@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_VERSION = "MESH_ONLY_FINAL_PLAYWRIGHT_FIX"
+BOT_VERSION = "MESH_ONLY_DOMCONTENT_FIX"
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
@@ -74,6 +74,23 @@ def load_waiting_results():
 def save_waiting_results(data):
     with open(DATA_FILE, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
+
+
+async def safe_goto(page, url, timeout=30000):
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+        return True
+    except Exception as e:
+        print(f"⚠️ Ошибка перехода на {url}: {e}")
+        return False
+
+
+async def safe_body_text(page, timeout=12000):
+    try:
+        return await page.locator("body").inner_text(timeout=timeout)
+    except Exception as e:
+        print("⚠️ Не смог прочитать body:", e)
+        return ""
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -239,9 +256,7 @@ async def scan_results(app: Application):
         if item.get("status") != "waiting":
             continue
 
-        result = await check_result_in_portfolio(
-            diagnostic=item["diagnostic"],
-        )
+        result = await check_result_in_portfolio(diagnostic=item["diagnostic"])
 
         if result["found"]:
             item["status"] = "found"
@@ -292,14 +307,14 @@ async def check_result_in_portfolio(diagnostic):
             print("🌐 Проверяю только Портфолио МЭШ")
             print(f"📌 Ищу диагностику: {diagnostic}")
 
-            await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
-            await page.wait_for_timeout(10000)
+            await safe_goto(page, PORTFOLIO_URL, timeout=30000)
+            await page.wait_for_timeout(8000)
 
             for _ in range(15):
                 await page.mouse.wheel(0, 1200)
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(800)
 
-            page_text = await page.locator("body").inner_text(timeout=30000)
+            page_text = await safe_body_text(page, timeout=15000)
 
             print("📄 Текст страницы, первые 5000 символов:")
             print(page_text[:5000])
@@ -322,15 +337,20 @@ async def login_to_mos(page):
     try:
         print("🔐 Открываю Портфолио МЭШ")
 
-        await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
-        await page.wait_for_timeout(6000)
+        await safe_goto(page, PORTFOLIO_URL, timeout=30000)
+        await page.wait_for_timeout(5000)
 
-        text = await page.locator("body").inner_text(timeout=30000)
+        text = await safe_body_text(page, timeout=12000)
         lower = normalize_text(text)
+
+        print("📄 Первый текст страницы:")
+        print(text[:1500])
 
         if "портфолио" in lower and "учеба" in lower:
             print("✅ Уже авторизован")
             return True
+
+        print("🔐 Ищу кнопку входа")
 
         login_texts = [
             "Войти",
@@ -343,11 +363,13 @@ async def login_to_mos(page):
         for txt in login_texts:
             try:
                 await page.get_by_text(txt, exact=False).click(timeout=5000)
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(4000)
                 print(f"✅ Нажал кнопку: {txt}")
                 break
             except Exception:
                 pass
+
+        print("🔐 Заполняю логин")
 
         login_selectors = [
             "input[name='login']",
@@ -377,9 +399,12 @@ async def login_to_mos(page):
             try:
                 await page.get_by_text(txt, exact=False).click(timeout=4000)
                 await page.wait_for_timeout(4000)
+                print(f"✅ Нажал после логина: {txt}")
                 break
             except Exception:
                 pass
+
+        print("🔐 Заполняю пароль")
 
         try:
             await page.locator("input[type='password']").first.fill(
@@ -394,23 +419,28 @@ async def login_to_mos(page):
         for txt in ["Войти", "Продолжить", "Подтвердить"]:
             try:
                 await page.get_by_text(txt, exact=False).click(timeout=5000)
-                await page.wait_for_timeout(9000)
+                await page.wait_for_timeout(8000)
+                print(f"✅ Нажал вход: {txt}")
                 break
             except Exception:
                 pass
 
-        await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
-        await page.wait_for_timeout(7000)
+        print("🔁 Перехожу обратно в Портфолио МЭШ")
 
-        final_text = await page.locator("body").inner_text(timeout=30000)
+        await safe_goto(page, PORTFOLIO_URL, timeout=30000)
+        await page.wait_for_timeout(8000)
+
+        final_text = await safe_body_text(page, timeout=15000)
         final_lower = normalize_text(final_text)
+
+        print("📄 Текст после входа:")
+        print(final_text[:1500])
 
         if "портфолио" in final_lower or "учеба" in final_lower:
             print("✅ Вход выполнен")
             return True
 
         print("❌ Портфолио после входа не открылось")
-        print(final_text[:1500])
         return False
 
     except Exception as e:
