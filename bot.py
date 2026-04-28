@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
+
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
 MOS_PASSWORD = os.environ.get("MOS_PASSWORD")
 
@@ -27,8 +28,14 @@ PORTFOLIO_URL = "https://school.mos.ru/portfolio/student/study"
 OKMCKO_URL = "https://okmcko.mos.ru"
 
 SITES_TO_CHECK = [
-    {"name": "Портфолио МЭШ", "url": PORTFOLIO_URL},
-    {"name": "ОК МЦКО", "url": OKMCKO_URL},
+    {
+        "name": "Портфолио МЭШ",
+        "url": PORTFOLIO_URL,
+    },
+    {
+        "name": "ОК МЦКО",
+        "url": OKMCKO_URL,
+    },
 ]
 
 
@@ -50,7 +57,8 @@ def save_waiting_results(data):
 
 def normalize_text(text: str) -> str:
     return (
-        text.lower()
+        str(text)
+        .lower()
         .replace("ё", "е")
         .replace("-", " ")
         .replace("—", " ")
@@ -59,6 +67,8 @@ def normalize_text(text: str) -> str:
         .replace(",", " ")
         .replace(".", " ")
         .replace(":", " ")
+        .replace("/", " ")
+        .replace("\\", " ")
     )
 
 
@@ -80,12 +90,14 @@ async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if MOS_LOGIN and MOS_PASSWORD:
         await update.message.reply_text(
             "✅ MOS_LOGIN и MOS_PASSWORD добавлены.\n"
-            "Бот будет пробовать входить через mos.ru."
+            "Бот будет пробовать входить через mos.ru/МЭШ."
         )
     else:
         await update.message.reply_text(
             "❌ Нет MOS_LOGIN или MOS_PASSWORD.\n\n"
-            "Добавь их в Railway → Variables."
+            "Добавь их в Railway → Variables:\n"
+            "MOS_LOGIN\n"
+            "MOS_PASSWORD"
         )
 
 
@@ -100,25 +112,43 @@ async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📚 Напиши предмет. Например: Математика")
+    await update.message.reply_text(
+        "📚 Напиши предмет.\n\n"
+        "Например:\n"
+        "Математика"
+    )
     return ASK_SUBJECT
 
 
 async def ask_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["subject"] = update.message.text.strip()
-    await update.message.reply_text("🎓 Напиши класс/параллель. Например: 7")
+    await update.message.reply_text(
+        "🎓 Напиши класс/параллель.\n\n"
+        "Например:\n"
+        "7"
+    )
     return ASK_GRADE
 
 
 async def ask_grade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["grade"] = update.message.text.strip()
-    await update.message.reply_text("📅 Напиши дату. Например: 21.04.2025")
+    await update.message.reply_text(
+        "📅 Напиши дату.\n\n"
+        "Например:\n"
+        "21.04.2025"
+    )
     return ASK_DATE
 
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["date"] = update.message.text.strip()
-    await update.message.reply_text("📝 Напиши диагностику. Например: алгебра")
+    await update.message.reply_text(
+        "📝 Напиши диагностику.\n\n"
+        "Например:\n"
+        "алгебра\n\n"
+        "Если на сайте написано «Математика (часть 1 - алгебра)», "
+        "сюда лучше писать просто: алгебра"
+    )
     return ASK_DIAGNOSTIC
 
 
@@ -194,7 +224,14 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     found_count = await scan_results(context.application)
 
     if found_count == 0:
-        await update.message.reply_text("⏳ Пока результатов нет или бот не смог их увидеть.")
+        await update.message.reply_text(
+            "⏳ Пока результатов нет или бот не смог их увидеть.\n\n"
+            "Проверь, что ожидание добавлено так:\n"
+            "Предмет: Математика\n"
+            "Класс: 7\n"
+            "Дата: 21.04.2025\n"
+            "Диагностика: алгебра"
+        )
     else:
         await update.message.reply_text(f"✅ Найдено результатов: {found_count}")
 
@@ -266,17 +303,21 @@ async def check_results_on_sites(subject, grade, date, diagnostic):
                 return {"found": False, "site": None, "snippet": ""}
 
             for site in SITES_TO_CHECK:
-                print(f"🌐 Проверяю {site['name']}")
+                print(f"🌐 Проверяю {site['name']} — {site['url']}")
 
                 try:
                     await page.goto(site["url"], wait_until="networkidle", timeout=90000)
                     await page.wait_for_timeout(8000)
 
-                    for _ in range(6):
+                    # Прокрутка страницы, чтобы подгрузились карточки результатов.
+                    for _ in range(8):
                         await page.mouse.wheel(0, 1200)
                         await page.wait_for_timeout(1200)
 
                     page_text = await page.locator("body").inner_text(timeout=30000)
+
+                    print("📄 Текст страницы, первые 2000 символов:")
+                    print(page_text[:2000])
 
                     if is_result_found(page_text, subject, grade, date, diagnostic):
                         snippet = make_snippet(page_text, date, diagnostic)
@@ -324,14 +365,20 @@ async def login_to_mos(page):
             "Продолжить",
         ]
 
+        clicked_login = False
+
         for txt in login_texts:
             try:
                 await page.get_by_text(txt, exact=False).click(timeout=5000)
                 await page.wait_for_timeout(5000)
                 print(f"✅ Нажал кнопку: {txt}")
+                clicked_login = True
                 break
             except Exception:
                 pass
+
+        if not clicked_login:
+            print("⚠️ Кнопку входа не нашёл, пробую искать поля сразу")
 
         print("🔐 Заполняю логин")
 
@@ -372,7 +419,10 @@ async def login_to_mos(page):
         print("🔐 Заполняю пароль")
 
         try:
-            await page.locator("input[type='password']").first.fill(MOS_PASSWORD, timeout=10000)
+            await page.locator("input[type='password']").first.fill(
+                MOS_PASSWORD,
+                timeout=10000,
+            )
             print("✅ Пароль заполнен")
         except Exception:
             print("❌ Не найдено поле пароля")
@@ -421,51 +471,54 @@ def is_result_found(page_text, subject, grade, date, diagnostic):
     date = normalize_text(date)
     diagnostic = normalize_text(diagnostic)
 
-    checks = []
+    # Главное: дата + диагностика + параллель.
+    # Предмет не блокирует поиск, потому что ученик может написать "Алгебра",
+    # а на сайте это может быть внутри "Математика (часть 1 - алгебра)".
 
-    if subject:
-        checks.append(subject in text)
+    date_ok = date in text if date else True
+    diagnostic_ok = diagnostic in text if diagnostic else True
 
-    if date:
-        checks.append(date in text)
-
-    if diagnostic:
-        checks.append(diagnostic in text)
-
+    grade_ok = True
     if grade:
         variants = [
             f"{grade} класс",
             f"{grade} классов",
             f"{grade} х классов",
             f"{grade} ых классов",
+            f"{grade} й класс",
             grade,
         ]
-
         grade_ok = any(normalize_text(v) in text for v in variants)
-        checks.append(grade_ok)
+
+    subject_ok = True
+    if subject:
+        subject_ok = subject in text
 
     print(
         "🔎 Проверка результата:",
         {
             "subject": subject,
+            "subject_ok": subject_ok,
             "grade": grade,
+            "grade_ok": grade_ok,
             "date": date,
+            "date_ok": date_ok,
             "diagnostic": diagnostic,
-            "checks": checks,
+            "diagnostic_ok": diagnostic_ok,
         },
     )
 
-    return all(checks)
+    return date_ok and diagnostic_ok and grade_ok
 
 
 def make_snippet(page_text, date, diagnostic):
     lower = page_text.lower()
     positions = []
 
-    if diagnostic.lower() in lower:
+    if diagnostic and diagnostic.lower() in lower:
         positions.append(lower.find(diagnostic.lower()))
 
-    if date.lower() in lower:
+    if date and date.lower() in lower:
         positions.append(lower.find(date.lower()))
 
     positions = [p for p in positions if p >= 0]
