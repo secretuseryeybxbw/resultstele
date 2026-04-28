@@ -17,7 +17,20 @@ TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 
 DATA_FILE = "waiting_results.json"
 
+CHECK_INTERVAL_SECONDS = 60
+
 ASK_SUBJECT, ASK_GRADE, ASK_DATE, ASK_DIAGNOSTIC = range(4)
+
+SITES_TO_CHECK = [
+    {
+        "name": "ОК МЦКО",
+        "url": "https://okmcko.mos.ru",
+    },
+    {
+        "name": "Портфолио МЭШ",
+        "url": "https://school.mos.ru/portfolio/student/study",
+    },
+]
 
 
 def load_waiting_results():
@@ -39,12 +52,23 @@ def save_waiting_results(data):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Бот проверки результатов запущен.\n\n"
+        "После добавления диагностики бот сам будет проверять её каждую 1 минуту.\n\n"
         "Команды:\n"
         "/add — добавить диагностику в ожидание\n"
-        "/list — показать ожидаемые результаты\n"
+        "/list — показать ожидания\n"
         "/delete — удалить все ожидания\n"
-        "/check — проверить сейчас"
+        "/check — проверить сейчас\n"
+        "/sites — показать сайты проверки"
     )
+
+
+async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "Бот проверяет результаты на сайтах:\n\n"
+
+    for i, site in enumerate(SITES_TO_CHECK, start=1):
+        text += f"{i}. {site['name']}\n{site['url']}\n\n"
+
+    await update.message.reply_text(text)
 
 
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -79,7 +103,7 @@ async def ask_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "grade": context.user_data["grade"],
         "date": context.user_data["date"],
         "diagnostic": diagnostic,
-        "status": "waiting"
+        "status": "waiting",
     }
 
     data = load_waiting_results()
@@ -92,7 +116,7 @@ async def ask_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Параллель: {item['grade']}\n"
         f"Дата: {item['date']}\n"
         f"Диагностика: {item['diagnostic']}\n\n"
-        "Теперь бот будет проверять результаты каждые 2 минуты."
+        "Теперь бот сам будет проверять её каждую 1 минуту."
     )
 
     return ConversationHandler.END
@@ -109,7 +133,7 @@ async def list_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_items = [
         item for item in data
-        if item["chat_id"] == chat_id and item["status"] == "waiting"
+        if item.get("chat_id") == chat_id and item.get("status") == "waiting"
     ]
 
     if not user_items:
@@ -134,7 +158,7 @@ async def delete_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     new_data = [
         item for item in data
-        if item["chat_id"] != chat_id
+        if item.get("chat_id") != chat_id
     ]
 
     save_waiting_results(new_data)
@@ -148,7 +172,7 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     found_count = await scan_results(context.application)
 
     if found_count == 0:
-        await update.message.reply_text("Пока результатов нет. Добавлено в ожидание.")
+        await update.message.reply_text("Пока результатов нет. Ожидание продолжается.")
     else:
         await update.message.reply_text(f"Найдено результатов: {found_count}")
 
@@ -162,11 +186,11 @@ async def scan_results(app: Application):
         if item.get("status") != "waiting":
             continue
 
-        result_found = await check_results_on_site(
+        result_found = await check_results_on_sites(
             subject=item["subject"],
             grade=item["grade"],
             date=item["date"],
-            diagnostic=item["diagnostic"]
+            diagnostic=item["diagnostic"],
         )
 
         if result_found:
@@ -182,7 +206,7 @@ async def scan_results(app: Application):
                     f"Параллель: {item['grade']}\n"
                     f"Дата: {item['date']}\n"
                     f"Диагностика: {item['diagnostic']}"
-                )
+                ),
             )
 
     if changed:
@@ -191,33 +215,44 @@ async def scan_results(app: Application):
     return found_count
 
 
-async def check_results_on_site(subject, grade, date, diagnostic):
+async def check_results_on_sites(subject, grade, date, diagnostic):
     """
-    Сюда потом вставляется реальная проверка сайта.
+    Здесь пока заглушка.
 
-    Сейчас функция всегда возвращает False,
-    то есть бот будет считать, что результатов пока нет.
+    Бот уже:
+    - принимает данные от ученика;
+    - добавляет диагностику в ожидание;
+    - каждую 1 минуту запускает проверку;
+    - отправляет уведомление, если результат найден.
 
-    Когда будет точная ссылка на сайт с результатами,
-    сюда добавим код, который проверяет:
-    предмет + параллель + дату + диагностику.
+    Но настоящая проверка сайта пока не подключена,
+    поэтому сейчас return False.
     """
 
-    print(
-        "Проверка:",
-        subject,
-        grade,
-        date,
-        diagnostic
-    )
+    for site in SITES_TO_CHECK:
+        print(
+            "Проверяю сайт:",
+            site["name"],
+            site["url"],
+            "| Предмет:",
+            subject,
+            "| Параллель:",
+            grade,
+            "| Дата:",
+            date,
+            "| Диагностика:",
+            diagnostic,
+        )
 
     return False
 
 
 async def auto_scan(app: Application):
+    print("Автопроверка запущена. Интервал: 1 минута.")
+
     while True:
         await scan_results(app)
-        await asyncio.sleep(120)
+        await asyncio.sleep(CHECK_INTERVAL_SECONDS)
 
 
 async def post_init(app: Application):
@@ -252,6 +287,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("sites", sites))
     app.add_handler(CommandHandler("list", list_waiting))
     app.add_handler(CommandHandler("delete", delete_waiting))
     app.add_handler(CommandHandler("check", check_now))
