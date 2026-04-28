@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import subprocess
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -14,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_VERSION = "MESH_ONLY_FINAL"
+BOT_VERSION = "MESH_ONLY_FINAL_PLAYWRIGHT_FIX"
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
@@ -26,6 +27,18 @@ CHECK_INTERVAL_SECONDS = 60
 ASK_SUBJECT, ASK_GRADE, ASK_DATE, ASK_DIAGNOSTIC = range(4)
 
 PORTFOLIO_URL = "https://school.mos.ru/portfolio/student/study"
+
+
+def install_playwright_browsers():
+    try:
+        print("🔧 Проверяю браузеры Playwright...")
+        subprocess.run(
+            ["python", "-m", "playwright", "install", "--with-deps", "chromium"],
+            check=False,
+        )
+        print("✅ Проверка Playwright завершена")
+    except Exception as e:
+        print("⚠️ Не удалось выполнить установку Playwright:", e)
 
 
 def normalize_text(text: str) -> str:
@@ -453,6 +466,8 @@ async def post_init(app: Application):
 
 
 def main():
+    install_playwright_browsers()
+
     app = (
         Application.builder()
         .token(TG_BOT_TOKEN)
