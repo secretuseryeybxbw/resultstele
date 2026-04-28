@@ -69,6 +69,18 @@ def normalize_text(text: str) -> str:
         .replace(":", " ")
         .replace("/", " ")
         .replace("\\", " ")
+        .replace("\n", " ")
+        .replace("\t", " ")
+    )
+
+
+def normalize_date(date: str) -> str:
+    return (
+        str(date)
+        .strip()
+        .replace(" ", "")
+        .replace("-", ".")
+        .replace("/", ".")
     )
 
 
@@ -226,7 +238,7 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if found_count == 0:
         await update.message.reply_text(
             "⏳ Пока результатов нет или бот не смог их увидеть.\n\n"
-            "Проверь, что ожидание добавлено так:\n"
+            "Для твоего примера добавляй так:\n"
             "Предмет: Математика\n"
             "Класс: 7\n"
             "Дата: 21.04.2025\n"
@@ -309,15 +321,14 @@ async def check_results_on_sites(subject, grade, date, diagnostic):
                     await page.goto(site["url"], wait_until="networkidle", timeout=90000)
                     await page.wait_for_timeout(8000)
 
-                    # Прокрутка страницы, чтобы подгрузились карточки результатов.
                     for _ in range(8):
                         await page.mouse.wheel(0, 1200)
                         await page.wait_for_timeout(1200)
 
                     page_text = await page.locator("body").inner_text(timeout=30000)
 
-                    print("📄 Текст страницы, первые 2000 символов:")
-                    print(page_text[:2000])
+                    print("📄 Текст страницы, первые 2500 символов:")
+                    print(page_text[:2500])
 
                     if is_result_found(page_text, subject, grade, date, diagnostic):
                         snippet = make_snippet(page_text, date, diagnostic)
@@ -466,49 +477,79 @@ async def login_to_mos(page):
 def is_result_found(page_text, subject, grade, date, diagnostic):
     text = normalize_text(page_text)
 
-    subject = normalize_text(subject)
-    grade = normalize_text(grade)
-    date = normalize_text(date)
-    diagnostic = normalize_text(diagnostic)
+    subject_norm = normalize_text(subject)
+    grade_norm = normalize_text(grade)
+    date_norm = normalize_date(date)
+    diagnostic_norm = normalize_text(diagnostic)
 
-    # Главное: дата + диагностика + параллель.
-    # Предмет не блокирует поиск, потому что ученик может написать "Алгебра",
-    # а на сайте это может быть внутри "Математика (часть 1 - алгебра)".
+    # Дату проверяем двумя способами:
+    # 21.04.2025 в исходном тексте
+    # 21 04 2025 в нормализованном тексте
+    raw_page_text = str(page_text).lower()
+    raw_date = str(date).strip().lower()
 
-    date_ok = date in text if date else True
-    diagnostic_ok = diagnostic in text if diagnostic else True
+    date_ok = True
+    if raw_date:
+        date_variants_raw = [
+            raw_date,
+            raw_date.replace("-", "."),
+            raw_date.replace("/", "."),
+        ]
+
+        date_variants_norm = [
+            normalize_text(raw_date),
+            normalize_text(raw_date.replace(".", " ")),
+            normalize_text(raw_date.replace("-", " ")),
+            normalize_text(raw_date.replace("/", " ")),
+        ]
+
+        date_ok = (
+            any(v in raw_page_text for v in date_variants_raw)
+            or any(v in text for v in date_variants_norm)
+        )
+
+    diagnostic_ok = True
+    if diagnostic_norm:
+        diagnostic_variants = [
+            diagnostic_norm,
+            diagnostic_norm.replace("е", "ё"),
+            diagnostic_norm.replace("ё", "е"),
+        ]
+        diagnostic_ok = any(normalize_text(v) in text for v in diagnostic_variants)
 
     grade_ok = True
-    if grade:
-        variants = [
-            f"{grade} класс",
-            f"{grade} классов",
-            f"{grade} х классов",
-            f"{grade} ых классов",
-            f"{grade} й класс",
-            grade,
+    if grade_norm:
+        grade_variants = [
+            f"{grade_norm} класс",
+            f"{grade_norm} классов",
+            f"{grade_norm} х классов",
+            f"{grade_norm} ых классов",
+            f"{grade_norm} й класс",
+            grade_norm,
         ]
-        grade_ok = any(normalize_text(v) in text for v in variants)
+        grade_ok = any(normalize_text(v) in text for v in grade_variants)
 
     subject_ok = True
-    if subject:
-        subject_ok = subject in text
+    if subject_norm:
+        subject_ok = subject_norm in text
 
     print(
         "🔎 Проверка результата:",
         {
-            "subject": subject,
+            "subject": subject_norm,
             "subject_ok": subject_ok,
-            "grade": grade,
+            "grade": grade_norm,
             "grade_ok": grade_ok,
-            "date": date,
+            "date": date_norm,
             "date_ok": date_ok,
-            "diagnostic": diagnostic,
+            "diagnostic": diagnostic_norm,
             "diagnostic_ok": diagnostic_ok,
         },
     )
 
-    return date_ok and diagnostic_ok and grade_ok
+    # Мягкий поиск:
+    # чтобы результат считался найденным, достаточно даты + диагностики.
+    return date_ok and diagnostic_ok
 
 
 def make_snippet(page_text, date, diagnostic):
