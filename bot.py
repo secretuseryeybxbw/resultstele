@@ -25,18 +25,6 @@ CHECK_INTERVAL_SECONDS = 60
 ASK_SUBJECT, ASK_GRADE, ASK_DATE, ASK_DIAGNOSTIC = range(4)
 
 PORTFOLIO_URL = "https://school.mos.ru/portfolio/student/study"
-OKMCKO_URL = "https://okmcko.mos.ru"
-
-SITES_TO_CHECK = [
-    {
-        "name": "Портфолио МЭШ",
-        "url": PORTFOLIO_URL,
-    },
-    {
-        "name": "ОК МЦКО",
-        "url": OKMCKO_URL,
-    },
-]
 
 
 def load_waiting_results():
@@ -76,13 +64,14 @@ def normalize_text(text: str) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Бот проверки результатов МЦКО/МЭШ запущен.\n\n"
+        "👋 Бот проверки результатов МЭШ запущен.\n\n"
+        "Бот проверяет только Портфолио МЭШ.\n\n"
         "Команды:\n"
         "➕ /add — добавить диагностику\n"
         "📋 /list — показать ожидания\n"
         "🗑 /delete — удалить ожидания\n"
         "🔎 /check — проверить сейчас\n"
-        "🌐 /sites — сайты проверки\n"
+        "🌐 /sites — сайт проверки\n"
         "🔐 /auth — проверить логин mos.ru\n\n"
         "⏱ Проверка идёт каждую 1 минуту."
     )
@@ -105,11 +94,8 @@ async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🌐 Бот проверяет:\n\n"
-        "1. Портфолио МЭШ\n"
-        "https://school.mos.ru/portfolio/student/study\n\n"
-        "2. ОК МЦКО\n"
-        "https://okmcko.mos.ru"
+        "🌐 Бот проверяет только Портфолио МЭШ:\n\n"
+        "https://school.mos.ru/portfolio/student/study"
     )
 
 
@@ -148,8 +134,8 @@ async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📝 Напиши диагностику.\n\n"
         "Например:\n"
         "алгебра\n\n"
-        "Если на сайте написано «Математика (часть 1 - алгебра)», "
-        "сюда лучше писать просто: алгебра"
+        "Или:\n"
+        "геометрия"
     )
     return ASK_DIAGNOSTIC
 
@@ -221,18 +207,16 @@ async def delete_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔎 Проверяю сейчас...")
+    await update.message.reply_text("🔎 Проверяю Портфолио МЭШ сейчас...")
 
     found_count = await scan_results(context.application)
 
     if found_count == 0:
         await update.message.reply_text(
-            "⏳ Пока результатов нет или бот не смог их увидеть.\n\n"
-            "Для твоего примера добавляй так:\n"
-            "Предмет: Математика\n"
-            "Класс: 7\n"
-            "Дата: 21.04.2025\n"
-            "Диагностика: алгебра"
+            "⏳ Пока результат по диагностике не найден.\n\n"
+            "Проверь, что диагностика введена коротко, например:\n"
+            "алгебра\n"
+            "геометрия"
         )
     else:
         await update.message.reply_text(f"✅ Найдено результатов: {found_count}")
@@ -247,7 +231,7 @@ async def scan_results(app: Application):
         if item.get("status") != "waiting":
             continue
 
-        result = await check_results_on_sites(
+        result = await check_result_in_portfolio(
             subject=item["subject"],
             grade=item["grade"],
             date=item["date"],
@@ -262,12 +246,12 @@ async def scan_results(app: Application):
             await app.bot.send_message(
                 chat_id=item["chat_id"],
                 text=(
-                    "🎉 Найдены результаты!\n\n"
+                    "🎉 Найден результат по диагностике!\n\n"
                     f"📚 Предмет: {item['subject']}\n"
                     f"🎓 Параллель: {item['grade']}\n"
                     f"📅 Дата: {item['date']}\n"
                     f"📝 Диагностика: {item['diagnostic']}\n\n"
-                    f"🌐 Найдено на сайте: {result['site']}\n\n"
+                    "🌐 Найдено в Портфолио МЭШ.\n\n"
                     f"📌 Фрагмент:\n{result['snippet'][:1500]}"
                 ),
             )
@@ -278,10 +262,10 @@ async def scan_results(app: Application):
     return found_count
 
 
-async def check_results_on_sites(subject, grade, date, diagnostic):
+async def check_result_in_portfolio(subject, grade, date, diagnostic):
     if not MOS_LOGIN or not MOS_PASSWORD:
         print("❌ Нет MOS_LOGIN или MOS_PASSWORD")
-        return {"found": False, "site": None, "snippet": ""}
+        return {"found": False, "snippet": ""}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -302,50 +286,44 @@ async def check_results_on_sites(subject, grade, date, diagnostic):
             if not logged_in:
                 print("❌ Вход в mos.ru/МЭШ не выполнен")
                 await browser.close()
-                return {"found": False, "site": None, "snippet": ""}
+                return {"found": False, "snippet": ""}
 
-            for site in SITES_TO_CHECK:
-                print(f"🌐 Проверяю {site['name']} — {site['url']}")
+            print("🌐 Проверяю только Портфолио МЭШ")
 
-                try:
-                    await page.goto(site["url"], wait_until="networkidle", timeout=90000)
-                    await page.wait_for_timeout(8000)
+            await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
+            await page.wait_for_timeout(10000)
 
-                    # Прокручиваем страницу, чтобы подгрузились карточки результатов.
-                    for _ in range(10):
-                        await page.mouse.wheel(0, 1200)
-                        await page.wait_for_timeout(1200)
+            # Прокручиваем страницу, чтобы подгрузились карточки.
+            for _ in range(12):
+                await page.mouse.wheel(0, 1200)
+                await page.wait_for_timeout(1000)
 
-                    page_text = await page.locator("body").inner_text(timeout=30000)
+            page_text = await page.locator("body").inner_text(timeout=30000)
 
-                    print("📄 Текст страницы, первые 3000 символов:")
-                    print(page_text[:3000])
+            print("📄 Текст страницы, первые 4000 символов:")
+            print(page_text[:4000])
 
-                    if is_result_found(page_text, subject, grade, date, diagnostic):
-                        snippet = make_snippet(page_text, date, diagnostic)
-                        await browser.close()
+            if is_result_found_by_diagnostic(page_text, diagnostic):
+                snippet = make_snippet(page_text, diagnostic)
+                await browser.close()
 
-                        return {
-                            "found": True,
-                            "site": site["name"],
-                            "snippet": snippet,
-                        }
-
-                except Exception as e:
-                    print(f"Ошибка проверки {site['name']}:", e)
+                return {
+                    "found": True,
+                    "snippet": snippet,
+                }
 
             await browser.close()
-            return {"found": False, "site": None, "snippet": ""}
+            return {"found": False, "snippet": ""}
 
         except Exception as e:
-            print("❌ Ошибка:", e)
+            print("❌ Ошибка проверки Портфолио МЭШ:", e)
             await browser.close()
-            return {"found": False, "site": None, "snippet": ""}
+            return {"found": False, "snippet": ""}
 
 
 async def login_to_mos(page):
     try:
-        print("🔐 Открываю портфолио МЭШ")
+        print("🔐 Открываю Портфолио МЭШ")
 
         await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
         await page.wait_for_timeout(6000)
@@ -353,7 +331,7 @@ async def login_to_mos(page):
         text = await page.locator("body").inner_text(timeout=30000)
         lower = normalize_text(text)
 
-        if "портфолио" in lower and ("учеба" in lower or "учёба" in lower):
+        if "портфолио" in lower and ("учеба" in lower or "учеба" in lower):
             print("✅ Уже авторизован")
             return True
 
@@ -439,21 +417,14 @@ async def login_to_mos(page):
             except Exception:
                 pass
 
-        after_text = await page.locator("body").inner_text(timeout=30000)
-        after_lower = normalize_text(after_text)
-
-        if "портфолио" in after_lower or "учеба" in after_lower or "учёба" in after_lower:
-            print("✅ Вход выполнен")
-            return True
-
         await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
         await page.wait_for_timeout(7000)
 
         final_text = await page.locator("body").inner_text(timeout=30000)
         final_lower = normalize_text(final_text)
 
-        if "портфолио" in final_lower or "учеба" in final_lower or "учёба" in final_lower:
-            print("✅ Вход выполнен после перехода")
+        if "портфолио" in final_lower or "учеба" in final_lower:
+            print("✅ Вход выполнен")
             return True
 
         print("❌ Портфолио после входа не открылось")
@@ -465,102 +436,44 @@ async def login_to_mos(page):
         return False
 
 
-def is_result_found(page_text, subject, grade, date, diagnostic):
+def is_result_found_by_diagnostic(page_text, diagnostic):
     text = normalize_text(page_text)
-
-    subject_norm = normalize_text(subject)
-    grade_norm = normalize_text(grade)
-    date_raw = str(date).strip().lower()
     diagnostic_norm = normalize_text(diagnostic)
 
-    # Очень мягкая проверка:
-    # ищем введённую диагностику: алгебра / геометрия / другое слово.
-    diagnostic_ok = False
-    if diagnostic_norm:
-        diagnostic_variants = [
-            diagnostic_norm,
-            diagnostic_norm.replace("е", "е"),
-            diagnostic_norm.replace("ё", "е"),
-        ]
-        diagnostic_ok = any(v in text for v in diagnostic_variants)
+    if not diagnostic_norm:
+        print("❌ Диагностика пустая")
+        return False
 
-    # Дата проверяется и выводится в лог, но НЕ блокирует результат.
-    date_ok = False
-    if date_raw:
-        date_variants = [
-            date_raw,
-            date_raw.replace(".", " "),
-            date_raw.replace("-", " "),
-            date_raw.replace("/", " "),
-        ]
+    diagnostic_variants = [
+        diagnostic_norm,
+        diagnostic_norm.replace("е", "ё"),
+        diagnostic_norm.replace("ё", "е"),
+    ]
 
-        for variant in date_variants:
-            if normalize_text(variant) in text or variant in str(page_text).lower():
-                date_ok = True
-                break
-
-    # Проверяем, что страница похожа на страницу результатов.
-    result_page_ok = (
-        "результат" in text
-        or "твои результат" in text
-        or "твой результат" in text
-        or "оценка качества образования" in text
-        or "баллов" in text
-        or "отметка" in text
-    )
-
-    # Класс и предмет только для логов.
-    subject_ok = subject_norm in text if subject_norm else True
-
-    grade_ok = True
-    if grade_norm:
-        grade_variants = [
-            f"{grade_norm} класс",
-            f"{grade_norm} классов",
-            f"{grade_norm} х классов",
-            f"{grade_norm} ых классов",
-            grade_norm,
-        ]
-        grade_ok = any(normalize_text(v) in text for v in grade_variants)
+    diagnostic_ok = any(normalize_text(v) in text for v in diagnostic_variants)
 
     print(
-        "🔎 МЯГКАЯ ПРОВЕРКА:",
+        "🔎 ПРОВЕРКА ПО ДИАГНОСТИКЕ:",
         {
-            "subject": subject_norm,
-            "subject_ok": subject_ok,
-            "grade": grade_norm,
-            "grade_ok": grade_ok,
-            "date": date_raw,
-            "date_ok": date_ok,
             "diagnostic": diagnostic_norm,
             "diagnostic_ok": diagnostic_ok,
-            "result_page_ok": result_page_ok,
         },
     )
 
-    # Результат найден, если есть диагностика и страница похожа на страницу результатов.
-    return diagnostic_ok and result_page_ok
+    return diagnostic_ok
 
 
-def make_snippet(page_text, date, diagnostic):
+def make_snippet(page_text, diagnostic):
     lower = page_text.lower()
-    positions = []
+    diagnostic_lower = diagnostic.lower()
 
-    if diagnostic and diagnostic.lower() in lower:
-        positions.append(lower.find(diagnostic.lower()))
-
-    if date and date.lower() in lower:
-        positions.append(lower.find(date.lower()))
-
-    positions = [p for p in positions if p >= 0]
-
-    if positions:
-        pos = min(positions)
-        start = max(0, pos - 400)
-        end = min(len(page_text), pos + 1000)
+    if diagnostic_lower in lower:
+        pos = lower.find(diagnostic_lower)
+        start = max(0, pos - 500)
+        end = min(len(page_text), pos + 1200)
         return page_text[start:end]
 
-    return page_text[:1200]
+    return page_text[:1500]
 
 
 async def auto_scan(app: Application):
