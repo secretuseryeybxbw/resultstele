@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_VERSION = "MESH_ONLY_DOMCONTENT_FIX"
+BOT_VERSION = "MESH_PORTFOLIO_ROOT_FINAL"
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
@@ -26,7 +26,7 @@ CHECK_INTERVAL_SECONDS = 60
 
 ASK_SUBJECT, ASK_GRADE, ASK_DATE, ASK_DIAGNOSTIC = range(4)
 
-PORTFOLIO_URL = "https://school.mos.ru/portfolio/student/study"
+PORTFOLIO_URL = "https://school.mos.ru/portfolio/"
 
 
 def install_playwright_browsers():
@@ -131,7 +131,7 @@ async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🌐 Бот проверяет только Портфолио МЭШ:\n\n"
-        "https://school.mos.ru/portfolio/student/study\n\n"
+        "https://school.mos.ru/portfolio/\n\n"
         f"Версия: {BOT_VERSION}"
     )
 
@@ -336,6 +336,7 @@ async def check_result_in_portfolio(diagnostic):
 async def login_to_mos(page):
     try:
         print("🔐 Открываю Портфолио МЭШ")
+        print(f"🔗 URL: {PORTFOLIO_URL}")
 
         await safe_goto(page, PORTFOLIO_URL, timeout=30000)
         await page.wait_for_timeout(5000)
@@ -426,6 +427,7 @@ async def login_to_mos(page):
                 pass
 
         print("🔁 Перехожу обратно в Портфолио МЭШ")
+        print(f"🔗 URL: {PORTFOLIO_URL}")
 
         await safe_goto(page, PORTFOLIO_URL, timeout=30000)
         await page.wait_for_timeout(8000)
