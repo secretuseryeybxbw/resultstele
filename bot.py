@@ -15,7 +15,6 @@ from telegram.ext import (
 )
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
-
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
 MOS_PASSWORD = os.environ.get("MOS_PASSWORD")
 
@@ -28,14 +27,8 @@ PORTFOLIO_URL = "https://school.mos.ru/portfolio/student/study"
 OKMCKO_URL = "https://okmcko.mos.ru"
 
 SITES_TO_CHECK = [
-    {
-        "name": "Портфолио МЭШ",
-        "url": PORTFOLIO_URL,
-    },
-    {
-        "name": "ОК МЦКО",
-        "url": OKMCKO_URL,
-    },
+    {"name": "Портфолио МЭШ", "url": PORTFOLIO_URL},
+    {"name": "ОК МЦКО", "url": OKMCKO_URL},
 ]
 
 
@@ -65,6 +58,7 @@ def normalize_text(text: str) -> str:
         .replace(")", " ")
         .replace(",", " ")
         .replace(".", " ")
+        .replace(":", " ")
     )
 
 
@@ -72,91 +66,69 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Бот проверки результатов МЦКО/МЭШ запущен.\n\n"
         "Команды:\n"
-        "➕ /add — добавить диагностику в ожидание\n"
+        "➕ /add — добавить диагностику\n"
         "📋 /list — показать ожидания\n"
-        "🗑 /delete — удалить все ожидания\n"
+        "🗑 /delete — удалить ожидания\n"
         "🔎 /check — проверить сейчас\n"
-        "🌐 /sites — показать сайты проверки\n"
-        "🔐 /auth — проверить, добавлен ли логин mos.ru\n\n"
-        "⚠️ Логин и пароль от mos.ru не вводятся в Telegram. "
-        "Они должны быть добавлены в Railway Variables."
+        "🌐 /sites — сайты проверки\n"
+        "🔐 /auth — проверить логин mos.ru\n\n"
+        "⏱ Проверка идёт каждую 1 минуту."
     )
 
 
 async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if MOS_LOGIN and MOS_PASSWORD:
         await update.message.reply_text(
-            "✅ Логин и пароль mos.ru добавлены в Railway Variables.\n\n"
-            "Бот попробует входить через mos.ru/МЭШ при проверке."
+            "✅ MOS_LOGIN и MOS_PASSWORD добавлены.\n"
+            "Бот будет пробовать входить через mos.ru."
         )
     else:
         await update.message.reply_text(
-            "❌ Логин или пароль mos.ru не добавлены.\n\n"
-            "В Railway → Variables нужно добавить:\n"
-            "MOS_LOGIN\n"
-            "MOS_PASSWORD"
+            "❌ Нет MOS_LOGIN или MOS_PASSWORD.\n\n"
+            "Добавь их в Railway → Variables."
         )
 
 
 async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "🌐 Бот проверяет сайты:\n\n"
-
-    for i, site in enumerate(SITES_TO_CHECK, start=1):
-        text += f"{i}. {site['name']}\n{site['url']}\n\n"
-
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        "🌐 Бот проверяет:\n\n"
+        "1. Портфолио МЭШ\n"
+        "https://school.mos.ru/portfolio/student/study\n\n"
+        "2. ОК МЦКО\n"
+        "https://okmcko.mos.ru"
+    )
 
 
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📚 Напиши предмет.\n\n"
-        "Например:\n"
-        "Математика"
-    )
+    await update.message.reply_text("📚 Напиши предмет. Например: Математика")
     return ASK_SUBJECT
 
 
 async def ask_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["subject"] = update.message.text.strip()
-    await update.message.reply_text(
-        "🎓 Напиши параллель/класс.\n\n"
-        "Например:\n"
-        "7"
-    )
+    await update.message.reply_text("🎓 Напиши класс/параллель. Например: 7")
     return ASK_GRADE
 
 
 async def ask_grade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["grade"] = update.message.text.strip()
-    await update.message.reply_text(
-        "📅 Напиши дату диагностики.\n\n"
-        "Например:\n"
-        "21.04.2025"
-    )
+    await update.message.reply_text("📅 Напиши дату. Например: 21.04.2025")
     return ASK_DATE
 
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["date"] = update.message.text.strip()
-    await update.message.reply_text(
-        "📝 Напиши название диагностики.\n\n"
-        "Например:\n"
-        "алгебра\n\n"
-        "Если на сайте написано «Математика (часть 1 - алгебра)», "
-        "сюда лучше писать просто: алгебра"
-    )
+    await update.message.reply_text("📝 Напиши диагностику. Например: алгебра")
     return ASK_DIAGNOSTIC
 
 
 async def ask_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    diagnostic = update.message.text.strip()
-
     item = {
         "chat_id": update.effective_chat.id,
         "subject": context.user_data["subject"],
         "grade": context.user_data["grade"],
         "date": context.user_data["date"],
-        "diagnostic": diagnostic,
+        "diagnostic": update.message.text.strip(),
         "status": "waiting",
     }
 
@@ -177,7 +149,7 @@ async def ask_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Добавление отменено.")
+    await update.message.reply_text("❌ Отменено.")
     return ConversationHandler.END
 
 
@@ -185,21 +157,21 @@ async def list_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_waiting_results()
     chat_id = update.effective_chat.id
 
-    user_items = [
+    items = [
         item for item in data
         if item.get("chat_id") == chat_id and item.get("status") == "waiting"
     ]
 
-    if not user_items:
-        await update.message.reply_text("📭 Сейчас нет диагностик в ожидании.")
+    if not items:
+        await update.message.reply_text("📭 Сейчас нет ожиданий.")
         return
 
     text = "📋 Ожидаемые результаты:\n\n"
 
-    for i, item in enumerate(user_items, start=1):
+    for i, item in enumerate(items, start=1):
         text += (
-            f"{i}. 📚 {item['subject']} / {item['diagnostic']}\n"
-            f"🎓 Параллель: {item['grade']}\n"
+            f"{i}. {item['subject']} / {item['diagnostic']}\n"
+            f"🎓 Класс: {item['grade']}\n"
             f"📅 Дата: {item['date']}\n\n"
         )
 
@@ -210,29 +182,19 @@ async def delete_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_waiting_results()
     chat_id = update.effective_chat.id
 
-    new_data = [
-        item for item in data
-        if item.get("chat_id") != chat_id
-    ]
-
-    save_waiting_results(new_data)
+    data = [item for item in data if item.get("chat_id") != chat_id]
+    save_waiting_results(data)
 
     await update.message.reply_text("🗑 Все ожидания удалены.")
 
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔎 Проверяю результаты сейчас...")
+    await update.message.reply_text("🔎 Проверяю сейчас...")
 
     found_count = await scan_results(context.application)
 
     if found_count == 0:
-        await update.message.reply_text(
-            "⏳ Пока результатов нет или бот не смог их увидеть.\n\n"
-            "Проверь:\n"
-            "1. В Railway добавлены MOS_LOGIN и MOS_PASSWORD\n"
-            "2. В диагностике правильно указан предмет: например Математика\n"
-            "3. Дата указана как на сайте: например 21.04.2025"
-        )
+        await update.message.reply_text("⏳ Пока результатов нет или бот не смог их увидеть.")
     else:
         await update.message.reply_text(f"✅ Найдено результатов: {found_count}")
 
@@ -267,7 +229,7 @@ async def scan_results(app: Application):
                     f"📅 Дата: {item['date']}\n"
                     f"📝 Диагностика: {item['diagnostic']}\n\n"
                     f"🌐 Найдено на сайте: {result['site']}\n\n"
-                    f"📌 Фрагмент:\n{result['snippet'][:1200]}"
+                    f"📌 Фрагмент:\n{result['snippet'][:1500]}"
                 ),
             )
 
@@ -279,12 +241,8 @@ async def scan_results(app: Application):
 
 async def check_results_on_sites(subject, grade, date, diagnostic):
     if not MOS_LOGIN or not MOS_PASSWORD:
-        print("❌ Нет MOS_LOGIN или MOS_PASSWORD в Railway Variables")
-        return {
-            "found": False,
-            "site": None,
-            "snippet": "",
-        }
+        print("❌ Нет MOS_LOGIN или MOS_PASSWORD")
+        return {"found": False, "site": None, "snippet": ""}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -300,41 +258,28 @@ async def check_results_on_sites(subject, grade, date, diagnostic):
         page = await context.new_page()
 
         try:
-            logged_in = await login_to_mos_if_needed(page)
+            logged_in = await login_to_mos(page)
 
             if not logged_in:
-                print("❌ Не удалось войти в mos.ru/МЭШ")
+                print("❌ Вход в mos.ru/МЭШ не выполнен")
                 await browser.close()
-                return {
-                    "found": False,
-                    "site": None,
-                    "snippet": "",
-                }
+                return {"found": False, "site": None, "snippet": ""}
 
             for site in SITES_TO_CHECK:
-                print(f"🌐 Проверяю сайт: {site['name']} — {site['url']}")
+                print(f"🌐 Проверяю {site['name']}")
 
                 try:
                     await page.goto(site["url"], wait_until="networkidle", timeout=90000)
-                    await page.wait_for_timeout(7000)
+                    await page.wait_for_timeout(8000)
 
-                    # Немного прокручиваем страницу, чтобы подгрузились карточки.
-                    for _ in range(4):
+                    for _ in range(6):
                         await page.mouse.wheel(0, 1200)
-                        await page.wait_for_timeout(1500)
+                        await page.wait_for_timeout(1200)
 
                     page_text = await page.locator("body").inner_text(timeout=30000)
 
-                    if is_result_found(
-                        page_text=page_text,
-                        subject=subject,
-                        grade=grade,
-                        date=date,
-                        diagnostic=diagnostic,
-                    ):
-                        print(f"✅ Результат найден на сайте: {site['name']}")
+                    if is_result_found(page_text, subject, grade, date, diagnostic):
                         snippet = make_snippet(page_text, date, diagnostic)
-
                         await browser.close()
 
                         return {
@@ -343,58 +288,53 @@ async def check_results_on_sites(subject, grade, date, diagnostic):
                             "snippet": snippet,
                         }
 
-                except Exception as site_error:
-                    print(f"Ошибка проверки сайта {site['name']}:", site_error)
+                except Exception as e:
+                    print(f"Ошибка проверки {site['name']}:", e)
 
             await browser.close()
-
-            return {
-                "found": False,
-                "site": None,
-                "snippet": "",
-            }
+            return {"found": False, "site": None, "snippet": ""}
 
         except Exception as e:
-            print("❌ Общая ошибка проверки:", e)
+            print("❌ Ошибка:", e)
             await browser.close()
-            return {
-                "found": False,
-                "site": None,
-                "snippet": "",
-            }
+            return {"found": False, "site": None, "snippet": ""}
 
 
-async def login_to_mos_if_needed(page):
+async def login_to_mos(page):
     try:
+        print("🔐 Открываю портфолио МЭШ")
+
         await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
-        await page.wait_for_timeout(5000)
+        await page.wait_for_timeout(6000)
 
         text = await page.locator("body").inner_text(timeout=30000)
         lower = normalize_text(text)
 
         if "портфолио" in lower and ("учеба" in lower or "учёба" in lower):
-            print("✅ Уже вошли в МЭШ")
+            print("✅ Уже авторизован")
             return True
 
-        print("🔐 Требуется вход. Пытаюсь войти через mos.ru")
+        print("🔐 Ищу кнопку входа")
 
-        # Пробуем нажать кнопку входа.
-        login_buttons = [
+        login_texts = [
             "Войти",
             "Войти через mos.ru",
             "Войти через МЭШ",
+            "Авторизоваться",
             "Продолжить",
         ]
 
-        for button_text in login_buttons:
+        for txt in login_texts:
             try:
-                await page.get_by_text(button_text, exact=False).click(timeout=5000)
-                await page.wait_for_timeout(4000)
+                await page.get_by_text(txt, exact=False).click(timeout=5000)
+                await page.wait_for_timeout(5000)
+                print(f"✅ Нажал кнопку: {txt}")
                 break
             except Exception:
                 pass
 
-        # Пытаемся заполнить логин.
+        print("🔐 Заполняю логин")
+
         login_selectors = [
             "input[name='login']",
             "input[name='username']",
@@ -408,81 +348,64 @@ async def login_to_mos_if_needed(page):
 
         for selector in login_selectors:
             try:
-                locator = page.locator(selector).first
-                await locator.fill(MOS_LOGIN, timeout=7000)
+                field = page.locator(selector).first
+                await field.fill(MOS_LOGIN, timeout=7000)
                 login_filled = True
-                print("✅ Логин заполнен")
+                print(f"✅ Логин заполнен через {selector}")
                 break
             except Exception:
                 pass
 
         if not login_filled:
-            print("❌ Не нашёл поле логина")
+            print("❌ Не найдено поле логина")
             return False
 
-        # Иногда после логина надо нажать Далее.
-        for next_text in ["Далее", "Продолжить", "Войти"]:
+        for txt in ["Далее", "Продолжить", "Войти"]:
             try:
-                await page.get_by_text(next_text, exact=False).click(timeout=4000)
-                await page.wait_for_timeout(3000)
+                await page.get_by_text(txt, exact=False).click(timeout=4000)
+                await page.wait_for_timeout(4000)
+                print(f"✅ Нажал после логина: {txt}")
                 break
             except Exception:
                 pass
 
-        # Пытаемся заполнить пароль.
-        password_filled = False
+        print("🔐 Заполняю пароль")
 
         try:
             await page.locator("input[type='password']").first.fill(MOS_PASSWORD, timeout=10000)
-            password_filled = True
             print("✅ Пароль заполнен")
         except Exception:
-            print("❌ Не нашёл поле пароля")
-
-        if not password_filled:
+            print("❌ Не найдено поле пароля")
             return False
 
-        # Нажимаем вход.
-        for enter_text in ["Войти", "Продолжить", "Подтвердить"]:
+        for txt in ["Войти", "Продолжить", "Подтвердить"]:
             try:
-                await page.get_by_text(enter_text, exact=False).click(timeout=5000)
-                await page.wait_for_timeout(8000)
+                await page.get_by_text(txt, exact=False).click(timeout=5000)
+                await page.wait_for_timeout(9000)
+                print(f"✅ Нажал вход: {txt}")
                 break
             except Exception:
                 pass
 
-        # Проверяем, не попросили ли код/капчу/подтверждение.
-        text_after = await page.locator("body").inner_text(timeout=30000)
-        lower_after = normalize_text(text_after)
+        after_text = await page.locator("body").inner_text(timeout=30000)
+        after_lower = normalize_text(after_text)
 
-        blocked_words = [
-            "смс",
-            "sms",
-            "код",
-            "captcha",
-            "капча",
-            "подтвердите",
-            "подтверждение",
-            "одноразовый",
-            "госуслуги",
-        ]
-
-        for word in blocked_words:
-            if word in lower_after:
-                print("⚠️ Сайт просит код/капчу/подтверждение. Автоматически пройти нельзя.")
-                return False
+        if "портфолио" in after_lower or "учеба" in after_lower or "учёба" in after_lower:
+            print("✅ Вход выполнен")
+            return True
 
         await page.goto(PORTFOLIO_URL, wait_until="networkidle", timeout=90000)
-        await page.wait_for_timeout(6000)
+        await page.wait_for_timeout(7000)
 
         final_text = await page.locator("body").inner_text(timeout=30000)
         final_lower = normalize_text(final_text)
 
         if "портфолио" in final_lower or "учеба" in final_lower or "учёба" in final_lower:
-            print("✅ Вход выполнен")
+            print("✅ Вход выполнен после перехода")
             return True
 
-        print("❌ После входа портфолио не открылось")
+        print("❌ Портфолио после входа не открылось")
+        print(final_text[:1500])
         return False
 
     except Exception as e:
@@ -500,33 +423,29 @@ def is_result_found(page_text, subject, grade, date, diagnostic):
 
     checks = []
 
-    # Предмет. Например: математика.
     if subject:
         checks.append(subject in text)
 
-    # Дата. Например: 21 04 2025 после нормализации.
     if date:
         checks.append(date in text)
 
-    # Диагностика. Например: алгебра / геометрия.
     if diagnostic:
         checks.append(diagnostic in text)
 
-    # Параллель может быть на сайте как "7", "7-х классов", "7 класс".
-    grade_ok = False
     if grade:
         variants = [
             f"{grade} класс",
             f"{grade} классов",
             f"{grade} х классов",
             f"{grade} ых классов",
-            f"{grade}",
+            grade,
         ]
+
         grade_ok = any(normalize_text(v) in text for v in variants)
         checks.append(grade_ok)
 
     print(
-        "🔎 Проверка слов:",
+        "🔎 Проверка результата:",
         {
             "subject": subject,
             "grade": grade,
@@ -540,22 +459,21 @@ def is_result_found(page_text, subject, grade, date, diagnostic):
 
 
 def make_snippet(page_text, date, diagnostic):
-    text_lower = page_text.lower()
-    diagnostic_lower = diagnostic.lower()
-    date_lower = date.lower()
-
+    lower = page_text.lower()
     positions = []
 
-    if diagnostic_lower in text_lower:
-        positions.append(text_lower.find(diagnostic_lower))
+    if diagnostic.lower() in lower:
+        positions.append(lower.find(diagnostic.lower()))
 
-    if date_lower in text_lower:
-        positions.append(text_lower.find(date_lower))
+    if date.lower() in lower:
+        positions.append(lower.find(date.lower()))
+
+    positions = [p for p in positions if p >= 0]
 
     if positions:
-        pos = min([p for p in positions if p >= 0])
-        start = max(0, pos - 300)
-        end = min(len(page_text), pos + 900)
+        pos = min(positions)
+        start = max(0, pos - 400)
+        end = min(len(page_text), pos + 1000)
         return page_text[start:end]
 
     return page_text[:1200]
