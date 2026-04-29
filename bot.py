@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_VERSION = "MESH_PORTFOLIO_ROOT_FINAL"
+BOT_VERSION = "MESH_AND_OKMCKO_LOGIN_V1"
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
@@ -26,7 +26,9 @@ CHECK_INTERVAL_SECONDS = 60
 
 ASK_SUBJECT, ASK_GRADE, ASK_DATE, ASK_DIAGNOSTIC = range(4)
 
+SCHOOL_URL = "https://school.mos.ru/"
 PORTFOLIO_URL = "https://school.mos.ru/portfolio/"
+OKMCKO_URL = "https://okmcko.mos.ru"
 
 
 def install_playwright_browsers():
@@ -76,8 +78,9 @@ def save_waiting_results(data):
         json.dump(data, file, ensure_ascii=False, indent=2)
 
 
-async def safe_goto(page, url, timeout=30000):
+async def safe_goto(page, url, timeout=45000):
     try:
+        print(f"🔗 Открываю: {url}")
         await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
         return True
     except Exception as e:
@@ -85,7 +88,7 @@ async def safe_goto(page, url, timeout=30000):
         return False
 
 
-async def safe_body_text(page, timeout=12000):
+async def safe_body_text(page, timeout=15000):
     try:
         return await page.locator("body").inner_text(timeout=timeout)
     except Exception as e:
@@ -93,19 +96,55 @@ async def safe_body_text(page, timeout=12000):
         return ""
 
 
+async def click_by_text(page, texts, timeout=4000):
+    for text in texts:
+        try:
+            await page.get_by_text(text, exact=False).click(timeout=timeout)
+            print(f"✅ Нажал кнопку по тексту: {text}")
+            await page.wait_for_timeout(3000)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+async def fill_first_visible(page, selectors, value, field_name):
+    for selector in selectors:
+        try:
+            fields = page.locator(selector)
+            count = await fields.count()
+            print(f"Пробую {field_name} selector {selector}, найдено: {count}")
+
+            for i in range(count):
+                field = fields.nth(i)
+                try:
+                    if await field.is_visible(timeout=1500):
+                        await field.fill(value, timeout=7000)
+                        print(f"✅ {field_name} заполнен через {selector}, поле {i}")
+                        return True
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Не подошёл selector {selector}: {e}")
+
+    print(f"❌ Не найдено поле: {field_name}")
+    return False
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Бот проверки результатов МЭШ запущен.\n\n"
-        "Проверяется только Портфолио МЭШ.\n\n"
+        "👋 Бот проверки результатов МЭШ/ОК МЦКО запущен.\n\n"
+        "Проверяет:\n"
+        "1. Портфолио МЭШ\n"
+        "2. ОК МЦКО\n\n"
         "Команды:\n"
         "➕ /add — добавить диагностику\n"
         "📋 /list — показать ожидания\n"
         "🗑 /delete — удалить ожидания\n"
         "🔎 /check — проверить сейчас\n"
-        "🌐 /sites — сайт проверки\n"
+        "🌐 /sites — сайты проверки\n"
         "🔐 /auth — проверить логин mos.ru\n"
-        "🧩 /version — версия кода\n\n"
-        "⏱ Проверка идёт каждую 1 минуту."
+        "🧩 /version — версия кода"
     )
 
 
@@ -117,12 +156,12 @@ async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if MOS_LOGIN and MOS_PASSWORD:
         await update.message.reply_text(
             "✅ MOS_LOGIN и MOS_PASSWORD добавлены.\n"
-            "Бот будет пробовать входить через mos.ru/МЭШ."
+            "Бот будет пробовать входить через school.mos.ru / МЭШ."
         )
     else:
         await update.message.reply_text(
             "❌ Нет MOS_LOGIN или MOS_PASSWORD.\n\n"
-            "Добавь их в Railway → Variables:\n"
+            "Добавь в Railway → Variables:\n"
             "MOS_LOGIN\n"
             "MOS_PASSWORD"
         )
@@ -130,8 +169,9 @@ async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🌐 Бот проверяет только Портфолио МЭШ:\n\n"
-        "https://school.mos.ru/portfolio/\n\n"
+        "🌐 Бот проверяет:\n\n"
+        "1. https://school.mos.ru/portfolio/\n"
+        "2. https://okmcko.mos.ru\n\n"
         f"Версия: {BOT_VERSION}"
     )
 
@@ -231,13 +271,13 @@ async def delete_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔎 Проверяю Портфолио МЭШ сейчас...")
+    await update.message.reply_text("🔎 Проверяю МЭШ и ОК МЦКО сейчас...")
 
     found_count = await scan_results(context.application)
 
     if found_count == 0:
         await update.message.reply_text(
-            "⏳ Пока результат по диагностике не найден.\n\n"
+            "⏳ Пока результат не найден.\n\n"
             "Проверь, что диагностика введена коротко:\n"
             "алгебра\n"
             "геометрия\n\n"
@@ -256,7 +296,12 @@ async def scan_results(app: Application):
         if item.get("status") != "waiting":
             continue
 
-        result = await check_result_in_portfolio(diagnostic=item["diagnostic"])
+        result = await check_all_sites(
+            diagnostic=item["diagnostic"],
+            subject=item["subject"],
+            grade=item["grade"],
+            date=item["date"],
+        )
 
         if result["found"]:
             item["status"] = "found"
@@ -266,12 +311,12 @@ async def scan_results(app: Application):
             await app.bot.send_message(
                 chat_id=item["chat_id"],
                 text=(
-                    "🎉 Найден результат по диагностике!\n\n"
+                    "🎉 Найден результат!\n\n"
                     f"📚 Предмет: {item['subject']}\n"
                     f"🎓 Параллель: {item['grade']}\n"
                     f"📅 Дата: {item['date']}\n"
                     f"📝 Диагностика: {item['diagnostic']}\n\n"
-                    "🌐 Найдено в Портфолио МЭШ.\n\n"
+                    f"🌐 Найдено на сайте: {result['site']}\n\n"
                     f"📌 Фрагмент:\n{result['snippet'][:1500]}"
                 ),
             )
@@ -282,10 +327,10 @@ async def scan_results(app: Application):
     return found_count
 
 
-async def check_result_in_portfolio(diagnostic):
+async def check_all_sites(diagnostic, subject, grade, date):
     if not MOS_LOGIN or not MOS_PASSWORD:
         print("❌ Нет MOS_LOGIN или MOS_PASSWORD")
-        return {"found": False, "snippet": ""}
+        return {"found": False, "site": "", "snippet": ""}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -297,157 +342,237 @@ async def check_result_in_portfolio(diagnostic):
         page = await context.new_page()
 
         try:
-            logged_in = await login_to_mos(page)
+            logged_in = await login_school_mos(page)
 
             if not logged_in:
-                print("❌ Вход в mos.ru/МЭШ не выполнен")
+                print("❌ Вход в school.mos.ru не выполнен")
                 await browser.close()
-                return {"found": False, "snippet": ""}
+                return {"found": False, "site": "", "snippet": ""}
 
-            print("🌐 Проверяю только Портфолио МЭШ")
-            print(f"📌 Ищу диагностику: {diagnostic}")
-
-            await safe_goto(page, PORTFOLIO_URL, timeout=30000)
-            await page.wait_for_timeout(8000)
-
-            for _ in range(15):
-                await page.mouse.wheel(0, 1200)
-                await page.wait_for_timeout(800)
-
-            page_text = await safe_body_text(page, timeout=15000)
-
-            print("📄 Текст страницы, первые 5000 символов:")
-            print(page_text[:5000])
-
-            if is_result_found_by_diagnostic(page_text, diagnostic):
-                snippet = make_snippet(page_text, diagnostic)
+            portfolio_result = await check_portfolio(page, diagnostic)
+            if portfolio_result["found"]:
                 await browser.close()
-                return {"found": True, "snippet": snippet}
+                return portfolio_result
+
+            okmcko_result = await check_okmcko(page, diagnostic)
+            if okmcko_result["found"]:
+                await browser.close()
+                return okmcko_result
 
             await browser.close()
-            return {"found": False, "snippet": ""}
+            return {"found": False, "site": "", "snippet": ""}
 
         except Exception as e:
-            print("❌ Ошибка проверки Портфолио МЭШ:", e)
+            print("❌ Общая ошибка проверки:", e)
             await browser.close()
-            return {"found": False, "snippet": ""}
+            return {"found": False, "site": "", "snippet": ""}
 
 
-async def login_to_mos(page):
+async def login_school_mos(page):
     try:
-        print("🔐 Открываю Портфолио МЭШ")
-        print(f"🔗 URL: {PORTFOLIO_URL}")
+        print("🔐 Открываю school.mos.ru")
+        await safe_goto(page, SCHOOL_URL, timeout=45000)
+        await page.wait_for_timeout(7000)
 
-        await safe_goto(page, PORTFOLIO_URL, timeout=30000)
-        await page.wait_for_timeout(5000)
-
-        text = await safe_body_text(page, timeout=12000)
+        text = await safe_body_text(page, timeout=15000)
         lower = normalize_text(text)
 
-        print("📄 Первый текст страницы:")
-        print(text[:1500])
+        print("📄 Текст school.mos.ru:")
+        print(text[:2000])
 
-        if "портфолио" in lower and "учеба" in lower:
-            print("✅ Уже авторизован")
+        if "дневник" in lower or "портфолио" in lower or "учеба" in lower:
+            print("✅ Уже авторизован на school.mos.ru")
             return True
 
         print("🔐 Ищу кнопку входа")
 
-        login_texts = [
-            "Войти",
-            "Войти через mos.ru",
-            "Войти через МЭШ",
-            "Авторизоваться",
-            "Продолжить",
-        ]
+        await click_by_text(
+            page,
+            [
+                "Войти",
+                "Войти через mos.ru",
+                "Войти через МЭШ",
+                "Авторизоваться",
+                "Продолжить",
+                "ЕЖД",
+                "МЭШ",
+            ],
+        )
 
-        for txt in login_texts:
-            try:
-                await page.get_by_text(txt, exact=False).click(timeout=5000)
-                await page.wait_for_timeout(4000)
-                print(f"✅ Нажал кнопку: {txt}")
-                break
-            except Exception:
-                pass
+        await page.wait_for_timeout(5000)
 
         print("🔐 Заполняю логин")
 
-        login_selectors = [
-            "input[name='login']",
-            "input[name='username']",
-            "input[name='email']",
-            "input[type='email']",
-            "input[type='text']",
-            "input",
-        ]
+        login_ok = await fill_first_visible(
+            page,
+            [
+                "input[name='login']",
+                "input[name='username']",
+                "input[name='email']",
+                "input[name='phone']",
+                "input[type='email']",
+                "input[type='tel']",
+                "input[type='text']",
+                "input:not([type])",
+                "input",
+            ],
+            MOS_LOGIN,
+            "логин",
+        )
 
-        login_filled = False
-        for selector in login_selectors:
-            try:
-                field = page.locator(selector).first
-                await field.fill(MOS_LOGIN, timeout=7000)
-                login_filled = True
-                print(f"✅ Логин заполнен через {selector}")
-                break
-            except Exception:
-                pass
-
-        if not login_filled:
+        if not login_ok:
             print("❌ Не найдено поле логина")
             return False
 
-        for txt in ["Далее", "Продолжить", "Войти"]:
-            try:
-                await page.get_by_text(txt, exact=False).click(timeout=4000)
-                await page.wait_for_timeout(4000)
-                print(f"✅ Нажал после логина: {txt}")
-                break
-            except Exception:
-                pass
+        await click_by_text(page, ["Далее", "Продолжить", "Войти"], timeout=5000)
 
         print("🔐 Заполняю пароль")
 
-        try:
-            await page.locator("input[type='password']").first.fill(
-                MOS_PASSWORD,
-                timeout=10000,
-            )
-            print("✅ Пароль заполнен")
-        except Exception:
+        password_ok = await fill_first_visible(
+            page,
+            [
+                "input[type='password']",
+                "input[name='password']",
+            ],
+            MOS_PASSWORD,
+            "пароль",
+        )
+
+        if not password_ok:
             print("❌ Не найдено поле пароля")
             return False
 
-        for txt in ["Войти", "Продолжить", "Подтвердить"]:
-            try:
-                await page.get_by_text(txt, exact=False).click(timeout=5000)
-                await page.wait_for_timeout(8000)
-                print(f"✅ Нажал вход: {txt}")
-                break
-            except Exception:
-                pass
+        await click_by_text(page, ["Войти", "Продолжить", "Подтвердить"], timeout=5000)
+        await page.wait_for_timeout(12000)
 
-        print("🔁 Перехожу обратно в Портфолио МЭШ")
-        print(f"🔗 URL: {PORTFOLIO_URL}")
-
-        await safe_goto(page, PORTFOLIO_URL, timeout=30000)
-        await page.wait_for_timeout(8000)
-
-        final_text = await safe_body_text(page, timeout=15000)
-        final_lower = normalize_text(final_text)
+        after_text = await safe_body_text(page, timeout=15000)
+        after_lower = normalize_text(after_text)
 
         print("📄 Текст после входа:")
-        print(final_text[:1500])
+        print(after_text[:2000])
 
-        if "портфолио" in final_lower or "учеба" in final_lower:
+        blocked_words = [
+            "смс",
+            "sms",
+            "код",
+            "captcha",
+            "капча",
+            "подтверд",
+            "одноразовый",
+            "госуслуги",
+        ]
+
+        if any(word in after_lower for word in blocked_words):
+            print("⚠️ Сайт просит код/подтверждение/капчу. Автоматически пройти нельзя.")
+            return False
+
+        if "дневник" in after_lower or "портфолио" in after_lower or "учеба" in after_lower:
             print("✅ Вход выполнен")
             return True
 
-        print("❌ Портфолио после входа не открылось")
+        print("⚠️ Вход мог выполниться, пробую перейти в портфолио")
+        await safe_goto(page, PORTFOLIO_URL, timeout=45000)
+        await page.wait_for_timeout(10000)
+
+        portfolio_text = await safe_body_text(page, timeout=15000)
+        portfolio_lower = normalize_text(portfolio_text)
+
+        if "портфолио" in portfolio_lower or "учеба" in portfolio_lower:
+            print("✅ Вход выполнен, портфолио доступно")
+            return True
+
+        print("❌ Вход не подтверждён")
         return False
 
     except Exception as e:
-        print("❌ Ошибка входа:", e)
+        print("❌ Ошибка входа school.mos.ru:", e)
         return False
+
+
+async def check_portfolio(page, diagnostic):
+    try:
+        print("🌐 Проверяю Портфолио МЭШ")
+        print(f"🔗 URL: {PORTFOLIO_URL}")
+        print(f"📌 Ищу диагностику: {diagnostic}")
+
+        await safe_goto(page, PORTFOLIO_URL, timeout=45000)
+        await page.wait_for_timeout(10000)
+
+        for _ in range(20):
+            await page.mouse.wheel(0, 1200)
+            await page.wait_for_timeout(700)
+
+        page_text = await safe_body_text(page, timeout=20000)
+
+        print("📄 Текст портфолио, первые 5000 символов:")
+        print(page_text[:5000])
+
+        if is_result_found_by_diagnostic(page_text, diagnostic):
+            return {
+                "found": True,
+                "site": "Портфолио МЭШ",
+                "snippet": make_snippet(page_text, diagnostic),
+            }
+
+        return {"found": False, "site": "", "snippet": ""}
+
+    except Exception as e:
+        print("❌ Ошибка проверки Портфолио МЭШ:", e)
+        return {"found": False, "site": "", "snippet": ""}
+
+
+async def check_okmcko(page, diagnostic):
+    try:
+        print("🌐 Проверяю ОК МЦКО")
+        print(f"🔗 URL: {OKMCKO_URL}")
+        print(f"📌 Ищу диагностику: {diagnostic}")
+
+        await safe_goto(page, OKMCKO_URL, timeout=45000)
+        await page.wait_for_timeout(8000)
+
+        text = await safe_body_text(page, timeout=15000)
+        lower = normalize_text(text)
+
+        print("📄 Текст ОК МЦКО до входа:")
+        print(text[:2000])
+
+        if "войти" in lower or "мэш" in lower or "mos" in lower:
+            await click_by_text(
+                page,
+                [
+                    "Войти через МЭШ",
+                    "Войти через mos.ru",
+                    "Войти",
+                    "Авторизоваться",
+                ],
+                timeout=6000,
+            )
+            await page.wait_for_timeout(10000)
+
+        await safe_goto(page, OKMCKO_URL, timeout=45000)
+        await page.wait_for_timeout(10000)
+
+        for _ in range(15):
+            await page.mouse.wheel(0, 1200)
+            await page.wait_for_timeout(700)
+
+        page_text = await safe_body_text(page, timeout=20000)
+
+        print("📄 Текст ОК МЦКО, первые 5000 символов:")
+        print(page_text[:5000])
+
+        if is_result_found_by_diagnostic(page_text, diagnostic):
+            return {
+                "found": True,
+                "site": "ОК МЦКО",
+                "snippet": make_snippet(page_text, diagnostic),
+            }
+
+        return {"found": False, "site": "", "snippet": ""}
+
+    except Exception as e:
+        print("❌ Ошибка проверки ОК МЦКО:", e)
+        return {"found": False, "site": "", "snippet": ""}
 
 
 def is_result_found_by_diagnostic(page_text, diagnostic):
@@ -460,16 +585,25 @@ def is_result_found_by_diagnostic(page_text, diagnostic):
 
     diagnostic_ok = diagnostic_norm in text
 
+    result_words_ok = (
+        "результат" in text
+        or "баллов" in text
+        or "отметка" in text
+        or "оценка качества образования" in text
+        or "диагностика" in text
+    )
+
     print(
-        "🔎 ПРОВЕРКА ПО ДИАГНОСТИКЕ:",
+        "🔎 ПРОВЕРКА РЕЗУЛЬТАТА:",
         {
             "diagnostic": diagnostic_norm,
             "diagnostic_ok": diagnostic_ok,
+            "result_words_ok": result_words_ok,
             "version": BOT_VERSION,
         },
     )
 
-    return diagnostic_ok
+    return diagnostic_ok and result_words_ok
 
 
 def make_snippet(page_text, diagnostic):
