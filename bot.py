@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from playwright.async_api import async_playwright
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -15,20 +15,32 @@ from telegram.ext import (
     filters,
 )
 
-BOT_VERSION = "MESH_AND_OKMCKO_LOGIN_V1"
+BOT_VERSION = "MESH_OKMCKO_MENU_30SEC_V1"
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
 MOS_PASSWORD = os.environ.get("MOS_PASSWORD")
 
 DATA_FILE = "waiting_results.json"
-CHECK_INTERVAL_SECONDS = 60
+CHECK_INTERVAL_SECONDS = 30
 
 ASK_SUBJECT, ASK_GRADE, ASK_DATE, ASK_DIAGNOSTIC = range(4)
 
 SCHOOL_URL = "https://school.mos.ru/"
 PORTFOLIO_URL = "https://school.mos.ru/portfolio/"
 OKMCKO_URL = "https://okmcko.mos.ru"
+
+MAIN_MENU = ReplyKeyboardMarkup(
+    [
+        ["🔐 Проверить вход"],
+        ["📋 Просмотр результатов диагностик"],
+        ["🔎 Поиск результата МЦКО"],
+        ["➕ Добавить диагностику"],
+        ["📄 Список ожиданий", "🗑 Очистить ожидания"],
+        ["🌐 Сайты", "🧩 Версия"],
+    ],
+    resize_keyboard=True,
+)
 
 
 def install_playwright_browsers():
@@ -96,15 +108,16 @@ async def safe_body_text(page, timeout=15000):
         return ""
 
 
-async def click_by_text(page, texts, timeout=4000):
+async def click_by_text(page, texts, timeout=5000):
     for text in texts:
         try:
             await page.get_by_text(text, exact=False).click(timeout=timeout)
-            print(f"✅ Нажал кнопку по тексту: {text}")
+            print(f"✅ Нажал кнопку: {text}")
             await page.wait_for_timeout(3000)
             return True
         except Exception:
             pass
+
     return False
 
 
@@ -113,17 +126,18 @@ async def fill_first_visible(page, selectors, value, field_name):
         try:
             fields = page.locator(selector)
             count = await fields.count()
-            print(f"Пробую {field_name} selector {selector}, найдено: {count}")
+            print(f"Пробую поле {field_name}: {selector}, найдено: {count}")
 
             for i in range(count):
                 field = fields.nth(i)
                 try:
                     if await field.is_visible(timeout=1500):
                         await field.fill(value, timeout=7000)
-                        print(f"✅ {field_name} заполнен через {selector}, поле {i}")
+                        print(f"✅ Поле {field_name} заполнено через {selector}, индекс {i}")
                         return True
                 except Exception:
                     pass
+
         except Exception as e:
             print(f"Не подошёл selector {selector}: {e}")
 
@@ -133,29 +147,21 @@ async def fill_first_visible(page, selectors, value, field_name):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Бот проверки результатов МЭШ/ОК МЦКО запущен.\n\n"
-        "Проверяет:\n"
-        "1. Портфолио МЭШ\n"
-        "2. ОК МЦКО\n\n"
-        "Команды:\n"
-        "➕ /add — добавить диагностику\n"
-        "📋 /list — показать ожидания\n"
-        "🗑 /delete — удалить ожидания\n"
-        "🔎 /check — проверить сейчас\n"
-        "🌐 /sites — сайты проверки\n"
-        "🔐 /auth — проверить логин mos.ru\n"
-        "🧩 /version — версия кода"
+        "👋 Бот проверки результатов МЭШ и ОК МЦКО запущен.\n\n"
+        "Выбери действие в меню ниже.\n\n"
+        "Проверка ожиданий идёт каждые 30 секунд.",
+        reply_markup=MAIN_MENU,
     )
 
 
 async def version(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Версия кода: {BOT_VERSION}")
+    await update.message.reply_text(f"🧩 Версия кода: {BOT_VERSION}")
 
 
 async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if MOS_LOGIN and MOS_PASSWORD:
         await update.message.reply_text(
-            "✅ MOS_LOGIN и MOS_PASSWORD добавлены.\n"
+            "✅ MOS_LOGIN и MOS_PASSWORD добавлены в Railway Variables.\n\n"
             "Бот будет пробовать входить через school.mos.ru / МЭШ."
         )
     else:
@@ -170,33 +176,45 @@ async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🌐 Бот проверяет:\n\n"
-        "1. https://school.mos.ru/portfolio/\n"
-        "2. https://okmcko.mos.ru\n\n"
+        f"1. МЭШ / Портфолио:\n{PORTFOLIO_URL}\n\n"
+        f"2. ОК МЦКО:\n{OKMCKO_URL}\n\n"
         f"Версия: {BOT_VERSION}"
     )
 
 
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📚 Напиши предмет. Например: Математика")
+    await update.message.reply_text(
+        "📚 Напиши предмет.\n\n"
+        "Например:\n"
+        "Математика"
+    )
     return ASK_SUBJECT
 
 
 async def ask_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["subject"] = update.message.text.strip()
-    await update.message.reply_text("🎓 Напиши класс/параллель. Например: 7")
+    await update.message.reply_text(
+        "🎓 Напиши класс/параллель.\n\n"
+        "Например:\n"
+        "7"
+    )
     return ASK_GRADE
 
 
 async def ask_grade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["grade"] = update.message.text.strip()
-    await update.message.reply_text("📅 Напиши дату. Например: 21.04.2025")
+    await update.message.reply_text(
+        "📅 Напиши дату диагностики.\n\n"
+        "Например:\n"
+        "21.04.2025"
+    )
     return ASK_DATE
 
 
 async def ask_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["date"] = update.message.text.strip()
     await update.message.reply_text(
-        "📝 Напиши диагностику.\n\n"
+        "📝 Напиши название диагностики.\n\n"
         "Например:\n"
         "алгебра\n"
         "геометрия"
@@ -224,14 +242,15 @@ async def ask_diagnostic(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎓 Параллель: {item['grade']}\n"
         f"📅 Дата: {item['date']}\n"
         f"📝 Диагностика: {item['diagnostic']}\n\n"
-        "⏱ Бот будет проверять её каждую 1 минуту."
+        "⏱ Бот будет проверять её каждые 30 секунд.",
+        reply_markup=MAIN_MENU,
     )
 
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Отменено.")
+    await update.message.reply_text("❌ Добавление отменено.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
 
@@ -245,7 +264,7 @@ async def list_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     if not items:
-        await update.message.reply_text("📭 Сейчас нет ожиданий.")
+        await update.message.reply_text("📭 Сейчас нет ожиданий.", reply_markup=MAIN_MENU)
         return
 
     text = "📋 Ожидаемые результаты:\n\n"
@@ -257,7 +276,7 @@ async def list_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📅 Дата: {item['date']}\n\n"
         )
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, reply_markup=MAIN_MENU)
 
 
 async def delete_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -267,7 +286,7 @@ async def delete_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = [item for item in data if item.get("chat_id") != chat_id]
     save_waiting_results(data)
 
-    await update.message.reply_text("🗑 Все ожидания удалены.")
+    await update.message.reply_text("🗑 Все ожидания удалены.", reply_markup=MAIN_MENU)
 
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -280,11 +299,40 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⏳ Пока результат не найден.\n\n"
             "Проверь, что диагностика введена коротко:\n"
             "алгебра\n"
-            "геометрия\n\n"
-            f"Версия: {BOT_VERSION}"
+            "геометрия",
+            reply_markup=MAIN_MENU,
         )
     else:
-        await update.message.reply_text(f"✅ Найдено результатов: {found_count}")
+        await update.message.reply_text(
+            f"✅ Найдено результатов: {found_count}",
+            reply_markup=MAIN_MENU,
+        )
+
+
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+
+    if text == "🔐 Проверить вход":
+        await auth_status(update, context)
+    elif text == "📋 Просмотр результатов диагностик":
+        await check_now(update, context)
+    elif text == "🔎 Поиск результата МЦКО":
+        await check_now(update, context)
+    elif text == "➕ Добавить диагностику":
+        return await add_start(update, context)
+    elif text == "📄 Список ожиданий":
+        await list_waiting(update, context)
+    elif text == "🗑 Очистить ожидания":
+        await delete_waiting(update, context)
+    elif text == "🌐 Сайты":
+        await sites(update, context)
+    elif text == "🧩 Версия":
+        await version(update, context)
+    else:
+        await update.message.reply_text(
+            "Не понял команду. Выбери действие кнопкой ниже.",
+            reply_markup=MAIN_MENU,
+        )
 
 
 async def scan_results(app: Application):
@@ -311,7 +359,7 @@ async def scan_results(app: Application):
             await app.bot.send_message(
                 chat_id=item["chat_id"],
                 text=(
-                    "🎉 Найден результат!\n\n"
+                    "🎉 Результаты найдены!\n\n"
                     f"📚 Предмет: {item['subject']}\n"
                     f"🎓 Параллель: {item['grade']}\n"
                     f"📅 Дата: {item['date']}\n"
@@ -397,6 +445,7 @@ async def login_school_mos(page):
                 "ЕЖД",
                 "МЭШ",
             ],
+            timeout=6000,
         )
 
         await page.wait_for_timeout(5000)
@@ -471,6 +520,7 @@ async def login_school_mos(page):
             return True
 
         print("⚠️ Вход мог выполниться, пробую перейти в портфолио")
+
         await safe_goto(page, PORTFOLIO_URL, timeout=45000)
         await page.wait_for_timeout(10000)
 
@@ -507,7 +557,7 @@ async def check_portfolio(page, diagnostic):
         print("📄 Текст портфолио, первые 5000 символов:")
         print(page_text[:5000])
 
-        if is_result_found_by_diagnostic(page_text, diagnostic):
+        if is_result_found(page_text, diagnostic):
             return {
                 "found": True,
                 "site": "Портфолио МЭШ",
@@ -561,7 +611,7 @@ async def check_okmcko(page, diagnostic):
         print("📄 Текст ОК МЦКО, первые 5000 символов:")
         print(page_text[:5000])
 
-        if is_result_found_by_diagnostic(page_text, diagnostic):
+        if is_result_found(page_text, diagnostic):
             return {
                 "found": True,
                 "site": "ОК МЦКО",
@@ -575,7 +625,7 @@ async def check_okmcko(page, diagnostic):
         return {"found": False, "site": "", "snippet": ""}
 
 
-def is_result_found_by_diagnostic(page_text, diagnostic):
+def is_result_found(page_text, diagnostic):
     text = normalize_text(page_text)
     diagnostic_norm = normalize_text(diagnostic)
 
@@ -620,7 +670,7 @@ def make_snippet(page_text, diagnostic):
 
 
 async def auto_scan(app: Application):
-    print(f"✅ Автопроверка запущена. Интервал: 1 минута. Версия: {BOT_VERSION}")
+    print(f"✅ Автопроверка запущена. Интервал: 30 секунд. Версия: {BOT_VERSION}")
 
     while True:
         await scan_results(app)
@@ -642,7 +692,10 @@ def main():
     )
 
     add_conversation = ConversationHandler(
-        entry_points=[CommandHandler("add", add_start)],
+        entry_points=[
+            CommandHandler("add", add_start),
+            MessageHandler(filters.Regex("^➕ Добавить диагностику$"), add_start),
+        ],
         states={
             ASK_SUBJECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_subject)],
             ASK_GRADE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_grade)],
@@ -654,6 +707,8 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    app.add_handler(add_conversation)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("version", version))
     app.add_handler(CommandHandler("auth", auth_status))
@@ -661,7 +716,16 @@ def main():
     app.add_handler(CommandHandler("list", list_waiting))
     app.add_handler(CommandHandler("delete", delete_waiting))
     app.add_handler(CommandHandler("check", check_now))
-    app.add_handler(add_conversation)
+
+    app.add_handler(MessageHandler(filters.Regex("^🔐 Проверить вход$"), auth_status))
+    app.add_handler(MessageHandler(filters.Regex("^📋 Просмотр результатов диагностик$"), check_now))
+    app.add_handler(MessageHandler(filters.Regex("^🔎 Поиск результата МЦКО$"), check_now))
+    app.add_handler(MessageHandler(filters.Regex("^📄 Список ожиданий$"), list_waiting))
+    app.add_handler(MessageHandler(filters.Regex("^🗑 Очистить ожидания$"), delete_waiting))
+    app.add_handler(MessageHandler(filters.Regex("^🌐 Сайты$"), sites))
+    app.add_handler(MessageHandler(filters.Regex("^🧩 Версия$"), version))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
     print(f"✅ Бот запущен. Версия: {BOT_VERSION}")
     app.run_polling()
