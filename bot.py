@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_VERSION = "MESH_OKMCKO_MENU_30SEC_V1"
+BOT_VERSION = "MESH_OKMCKO_FULL_FIX_V2"
 
 TG_BOT_TOKEN = os.environ["TG_BOT_TOKEN"]
 MOS_LOGIN = os.environ.get("MOS_LOGIN")
@@ -90,21 +90,48 @@ def save_waiting_results(data):
         json.dump(data, file, ensure_ascii=False, indent=2)
 
 
-async def safe_goto(page, url, timeout=45000):
-    try:
-        print(f"🔗 Открываю: {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-        return True
-    except Exception as e:
-        print(f"⚠️ Ошибка перехода на {url}: {e}")
-        return False
+async def safe_goto(page, url, timeout=90000):
+    for attempt in range(1, 4):
+        try:
+            print(f"🔗 Открываю: {url} | попытка {attempt}")
+
+            response = await page.goto(
+                url,
+                wait_until="commit",
+                timeout=timeout,
+            )
+
+            await page.wait_for_timeout(12000)
+
+            print(f"✅ URL после перехода: {page.url}")
+
+            if response:
+                print(f"✅ HTTP status: {response.status}")
+
+            return True
+
+        except Exception as e:
+            print(f"⚠️ Ошибка перехода на {url}, попытка {attempt}: {e}")
+            await page.wait_for_timeout(5000)
+
+    return False
 
 
-async def safe_body_text(page, timeout=15000):
+async def safe_body_text(page, timeout=30000):
     try:
-        return await page.locator("body").inner_text(timeout=timeout)
+        text = await page.locator("body").inner_text(timeout=timeout)
+        if text.strip():
+            return text
     except Exception as e:
         print("⚠️ Не смог прочитать body:", e)
+
+    try:
+        html = await page.content()
+        print("📄 HTML первые 3000 символов:")
+        print(html[:3000])
+        return html
+    except Exception as e2:
+        print("⚠️ Не смог прочитать HTML:", e2)
         return ""
 
 
@@ -162,14 +189,16 @@ async def auth_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if MOS_LOGIN and MOS_PASSWORD:
         await update.message.reply_text(
             "✅ MOS_LOGIN и MOS_PASSWORD добавлены в Railway Variables.\n\n"
-            "Бот будет пробовать входить через school.mos.ru / МЭШ."
+            "Бот будет пробовать входить через school.mos.ru / МЭШ.",
+            reply_markup=MAIN_MENU,
         )
     else:
         await update.message.reply_text(
             "❌ Нет MOS_LOGIN или MOS_PASSWORD.\n\n"
             "Добавь в Railway → Variables:\n"
             "MOS_LOGIN\n"
-            "MOS_PASSWORD"
+            "MOS_PASSWORD",
+            reply_markup=MAIN_MENU,
         )
 
 
@@ -178,7 +207,8 @@ async def sites(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🌐 Бот проверяет:\n\n"
         f"1. МЭШ / Портфолио:\n{PORTFOLIO_URL}\n\n"
         f"2. ОК МЦКО:\n{OKMCKO_URL}\n\n"
-        f"Версия: {BOT_VERSION}"
+        f"Версия: {BOT_VERSION}",
+        reply_markup=MAIN_MENU,
     )
 
 
@@ -318,8 +348,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await check_now(update, context)
     elif text == "🔎 Поиск результата МЦКО":
         await check_now(update, context)
-    elif text == "➕ Добавить диагностику":
-        return await add_start(update, context)
     elif text == "📄 Список ожиданий":
         await list_waiting(update, context)
     elif text == "🗑 Очистить ожидания":
@@ -383,10 +411,24 @@ async def check_all_sites(diagnostic, subject, grade, date):
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
 
-        context = await browser.new_context()
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            locale="ru-RU",
+        )
+
         page = await context.new_page()
 
         try:
@@ -419,18 +461,21 @@ async def check_all_sites(diagnostic, subject, grade, date):
 async def login_school_mos(page):
     try:
         print("🔐 Открываю school.mos.ru")
-        await safe_goto(page, SCHOOL_URL, timeout=45000)
-        await page.wait_for_timeout(7000)
+        await safe_goto(page, SCHOOL_URL, timeout=90000)
 
-        text = await safe_body_text(page, timeout=15000)
+        text = await safe_body_text(page, timeout=30000)
         lower = normalize_text(text)
 
         print("📄 Текст school.mos.ru:")
-        print(text[:2000])
+        print(text[:3000])
 
         if "дневник" in lower or "портфолио" in lower or "учеба" in lower:
             print("✅ Уже авторизован на school.mos.ru")
             return True
+
+        if "access denied" in lower or "forbidden" in lower or "captcha" in lower:
+            print("❌ school.mos.ru блокирует Railway / просит защиту")
+            return False
 
         print("🔐 Ищу кнопку входа")
 
@@ -494,11 +539,11 @@ async def login_school_mos(page):
         await click_by_text(page, ["Войти", "Продолжить", "Подтвердить"], timeout=5000)
         await page.wait_for_timeout(12000)
 
-        after_text = await safe_body_text(page, timeout=15000)
+        after_text = await safe_body_text(page, timeout=30000)
         after_lower = normalize_text(after_text)
 
         print("📄 Текст после входа:")
-        print(after_text[:2000])
+        print(after_text[:3000])
 
         blocked_words = [
             "смс",
@@ -521,10 +566,10 @@ async def login_school_mos(page):
 
         print("⚠️ Вход мог выполниться, пробую перейти в портфолио")
 
-        await safe_goto(page, PORTFOLIO_URL, timeout=45000)
+        await safe_goto(page, PORTFOLIO_URL, timeout=90000)
         await page.wait_for_timeout(10000)
 
-        portfolio_text = await safe_body_text(page, timeout=15000)
+        portfolio_text = await safe_body_text(page, timeout=30000)
         portfolio_lower = normalize_text(portfolio_text)
 
         if "портфолио" in portfolio_lower or "учеба" in portfolio_lower:
@@ -545,14 +590,14 @@ async def check_portfolio(page, diagnostic):
         print(f"🔗 URL: {PORTFOLIO_URL}")
         print(f"📌 Ищу диагностику: {diagnostic}")
 
-        await safe_goto(page, PORTFOLIO_URL, timeout=45000)
+        await safe_goto(page, PORTFOLIO_URL, timeout=90000)
         await page.wait_for_timeout(10000)
 
         for _ in range(20):
             await page.mouse.wheel(0, 1200)
             await page.wait_for_timeout(700)
 
-        page_text = await safe_body_text(page, timeout=20000)
+        page_text = await safe_body_text(page, timeout=30000)
 
         print("📄 Текст портфолио, первые 5000 символов:")
         print(page_text[:5000])
@@ -577,14 +622,14 @@ async def check_okmcko(page, diagnostic):
         print(f"🔗 URL: {OKMCKO_URL}")
         print(f"📌 Ищу диагностику: {diagnostic}")
 
-        await safe_goto(page, OKMCKO_URL, timeout=45000)
+        await safe_goto(page, OKMCKO_URL, timeout=90000)
         await page.wait_for_timeout(8000)
 
-        text = await safe_body_text(page, timeout=15000)
+        text = await safe_body_text(page, timeout=30000)
         lower = normalize_text(text)
 
         print("📄 Текст ОК МЦКО до входа:")
-        print(text[:2000])
+        print(text[:3000])
 
         if "войти" in lower or "мэш" in lower or "mos" in lower:
             await click_by_text(
@@ -599,14 +644,14 @@ async def check_okmcko(page, diagnostic):
             )
             await page.wait_for_timeout(10000)
 
-        await safe_goto(page, OKMCKO_URL, timeout=45000)
+        await safe_goto(page, OKMCKO_URL, timeout=90000)
         await page.wait_for_timeout(10000)
 
         for _ in range(15):
             await page.mouse.wheel(0, 1200)
             await page.wait_for_timeout(700)
 
-        page_text = await safe_body_text(page, timeout=20000)
+        page_text = await safe_body_text(page, timeout=30000)
 
         print("📄 Текст ОК МЦКО, первые 5000 символов:")
         print(page_text[:5000])
